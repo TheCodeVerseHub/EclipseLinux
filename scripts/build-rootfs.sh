@@ -11,6 +11,8 @@
 # Environment:
 #   VOID_DATE       - Void rootfs tarball date stamp (default: 20250202)
 #   ECLIPSE_VERSION - Version string (default: 0.1.0)
+#   ECLIPSE_STRIP_FIRMWARE - If set to 1, remove /usr/lib/firmware for a smaller ISO
+#                            (breaks many GPUs/Wi‑Fi). Default: keep firmware for Wayland/KMS.
 
 set -e
 
@@ -28,6 +30,7 @@ VOID_ROOTFS="void-${VOID_ARCH}-${VOID_LIBC}-ROOTFS-${VOID_DATE}.tar.xz"
 VOID_URL="${VOID_MIRROR}/${VOID_ROOTFS}"
 
 ECLIPSE_VERSION="${ECLIPSE_VERSION:-0.1.0}"
+ECLIPSE_STRIP_FIRMWARE="${ECLIPSE_STRIP_FIRMWARE:-0}"
 
 DYNAMOD_DIR="$PROJECT_ROOT/dynamod"
 ZIG_OUT="$DYNAMOD_DIR/zig/zig-out/bin"
@@ -127,14 +130,13 @@ echo "Installing packages..."
 # Notes:
 #   - 'grub' on Void includes i386-pc modules (no separate grub-i386-pc package)
 #   - eudev is already in the Void musl rootfs, so skip it to avoid "already installed" errors
+#   - dosfstools, e2fsprogs, btrfs-progs (and often xfsprogs/parted) ship in the live rootfs tarball;
+#     listing them again makes xbps-install exit with "already installed".
 chroot "$ROOTFS" xbps-install -Sy -y \
     linux \
     dbus \
     grub \
     grub-x86_64-efi \
-    dosfstools \
-    e2fsprogs \
-    btrfs-progs \
     xfsprogs \
     parted \
     dialog \
@@ -147,7 +149,24 @@ chroot "$ROOTFS" xbps-install -Sy -y \
     util-linux \
     busybox \
     ca-certificates \
-    dhcpcd
+    dhcpcd \
+    niri \
+    seatd \
+    mesa \
+    mesa-dri \
+    mesa-libgallium \
+    libgbm \
+    libinput \
+    xkeyboard-config \
+    dejavu-fonts-ttf \
+    alacritty \
+    fuzzel \
+    Waybar \
+    xwayland-satellite \
+    linux-firmware-amd \
+    linux-firmware-intel \
+    linux-firmware-nvidia \
+    linux-firmware-network
 
 # ============================================================
 # Install dynamod binaries
@@ -180,6 +199,29 @@ for svc in fsck remount-root-rw machine-id fstab-mount modules-load \
         cp "$DYNAMOD_DIR/config/services/${svc}.toml" "$ROOTFS/etc/dynamod/services/"
     fi
 done
+
+# Live ISO uses overlayfs on squashfs; `mount -o remount,rw /` fails on overlay (util-linux
+# exits 32) even though the upperdir is writable. That blocked machine-id, dbus, and niri deps.
+cat > "$ROOTFS/etc/dynamod/services/remount-root-rw.toml" <<'REMOUNT_RW'
+[service]
+name = "remount-root-rw"
+supervisor = "early-boot"
+exec = ["/bin/sh", "-c", "mount -o remount,rw / && exit 0; t=$(findmnt -n -o FSTYPE / 2>/dev/null | head -1); [ \"$t\" = overlay ] && exit 0; exit 1"]
+type = "oneshot"
+
+[restart]
+policy = "temporary"
+
+[dependencies]
+requires = ["fsck"]
+
+[readiness]
+type = "none"
+
+[shutdown]
+stop-signal = "SIGTERM"
+stop-timeout = "3s"
+REMOUNT_RW
 
 # D-Bus policy files
 mkdir -p "$ROOTFS/usr/share/dbus-1/system.d"
@@ -284,6 +326,35 @@ stop-signal = "SIGTERM"
 stop-timeout = "10s"
 DHCP
 
+# seatd: libseat provider for niri (LIBSEAT_BACKEND=seatd in profile.d).
+# SEATD_VTBOUND=0 on the *daemon* avoids hangs in QEMU/virtio where VT-based seat
+# activation never completes; libseat then blocks after loading niri config.
+cat > "$ROOTFS/etc/dynamod/services/seatd.toml" <<'SEATD'
+[service]
+name = "seatd"
+supervisor = "root"
+exec = ["/bin/sh", "-c", "exec env SEATD_VTBOUND=0 /usr/bin/seatd"]
+type = "simple"
+
+[restart]
+policy = "permanent"
+delay = "1s"
+max-restarts = 10
+max-restart-window = "60s"
+
+[dependencies]
+requires = ["udev"]
+after = ["udev-coldplug"]
+
+[readiness]
+type = "none"
+timeout = "10s"
+
+[shutdown]
+stop-signal = "SIGTERM"
+stop-timeout = "5s"
+SEATD
+
 # Permissive D-Bus system.conf for dynamod mimic daemons
 mkdir -p "$ROOTFS/etc/dbus-1"
 cat > "$ROOTFS/etc/dbus-1/system.conf" <<'DBUSCONF'
@@ -348,8 +419,25 @@ FSTAB
 
 touch "$ROOTFS/etc/modules" "$ROOTFS/etc/sysctl.conf"
 
+mkdir -p "$ROOTFS/etc/modules-load.d"
+printf '%s\n' 'virtio_gpu' > "$ROOTFS/etc/modules-load.d/eclipse-virtio-gpu.conf"
+
 # Install the TUI installer
 install -Dm755 "$PROJECT_ROOT/scripts/eclipse-install" "$ROOTFS/usr/bin/eclipse-install"
+install -Dm755 "$PROJECT_ROOT/scripts/eclipse-niri-session" "$ROOTFS/usr/bin/eclipse-niri-session"
+
+# Wayland / niri: use seatd (not logind) for libseat
+cat > "$ROOTFS/etc/profile.d/eclipse-wayland.sh" <<'WAYLAND'
+export LIBSEAT_BACKEND=seatd
+if [ -z "${XDG_RUNTIME_DIR}" ]; then
+    XDG_RUNTIME_DIR="/run/user/$(id -u)"
+    export XDG_RUNTIME_DIR
+fi
+if [ ! -d "${XDG_RUNTIME_DIR}" ] && [ "$(id -u)" -eq 0 ]; then
+    mkdir -m 0700 -p "${XDG_RUNTIME_DIR}" 2>/dev/null || true
+fi
+WAYLAND
+chmod 644 "$ROOTFS/etc/profile.d/eclipse-wayland.sh"
 
 # Shell profile hint for live environment
 cat > "$ROOTFS/etc/profile.d/eclipse-live.sh" <<'PROFILE'
@@ -357,6 +445,8 @@ if [ -d /run/dynamod/live ]; then
     echo ""
     echo "  Welcome to Eclipse Linux (live environment)"
     echo "  Run 'eclipse-install' to install to disk."
+    echo "  Graphical session (tty1): eclipse-niri-session"
+    echo "  (or: dbus-run-session niri --session — not plain niri)"
     echo ""
 fi
 PROFILE
@@ -398,11 +488,15 @@ fi
 # ============================================================
 echo "Slimming rootfs for live ISO..."
 
-# Remove linux-firmware blobs (643 MB); wired NICs and storage controllers
-# work without firmware. WiFi/GPU firmware can be added back later.
-echo "  Removing firmware blobs..."
-rm -rf "$ROOTFS/usr/lib/firmware"
-mkdir -p "$ROOTFS/usr/lib/firmware"
+# Firmware: keep by default so KMS / niri work on real hardware. Set
+# ECLIPSE_STRIP_FIRMWARE=1 for a smaller ISO (console-oriented / VM-only).
+if [ "$ECLIPSE_STRIP_FIRMWARE" = "1" ]; then
+    echo "  Removing firmware blobs (ECLIPSE_STRIP_FIRMWARE=1)..."
+    rm -rf "$ROOTFS/usr/lib/firmware"
+    mkdir -p "$ROOTFS/usr/lib/firmware"
+else
+    echo "  Keeping firmware (unset ECLIPSE_STRIP_FIRMWARE or set to 0 to keep; use =1 to strip)."
+fi
 
 # Remove non-English locales (53 MB)
 echo "  Stripping locales..."
