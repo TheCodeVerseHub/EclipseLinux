@@ -1,0 +1,7 @@
+NAME="Eclipse Linux"
+ID=eclipse
+ID_LIKE=void
+VERSION_ID=0.1.0
+PRETTY_NAME="Eclipse Linux 0.1.0"
+HOME_URL="https://github.com/sinisterMage/EclipseLinux"
+BUG_REPORT_URL="https://github.com/sinisterMage/EclipseLinux/issues"

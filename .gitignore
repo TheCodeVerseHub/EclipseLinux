@@ -1,0 +1,7 @@
+build/
+*.iso
+*.img
+*.squashfs
+dynamod/
+
+

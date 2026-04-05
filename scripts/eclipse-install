@@ -1,0 +1,592 @@
+#!/bin/sh
+# Eclipse Linux TUI Installer
+#
+# A dialog-based installer that guides the user through installing
+# Eclipse Linux from the live environment to a target disk.
+#
+# Requires: dialog, parted, mkfs.*, rsync, grub-install, chroot
+
+set -e
+
+TITLE="Eclipse Linux Installer"
+BACKTITLE="Eclipse Linux"
+SQUASHFS_MOUNT="/run/dynamod/live/squash"
+LOG="/tmp/eclipse-install.log"
+TARGET_MNT="/mnt/eclipse-target"
+
+# ============================================================
+# Helpers
+# ============================================================
+die() {
+    dialog --backtitle "$BACKTITLE" --title "Error" \
+        --msgbox "$1\n\nCheck $LOG for details." 10 60
+    cleanup
+    exit 1
+}
+
+log() {
+    echo "[$(date '+%H:%M:%S')] $*" >> "$LOG"
+}
+
+cleanup() {
+    set +e
+    umount "$TARGET_MNT/boot/efi" 2>/dev/null
+    umount "$TARGET_MNT/proc"     2>/dev/null
+    umount "$TARGET_MNT/dev"      2>/dev/null
+    umount "$TARGET_MNT/sys"      2>/dev/null
+    umount "$TARGET_MNT"          2>/dev/null
+    set -e
+}
+
+trap cleanup EXIT
+
+# Check requirements
+if [ "$(id -u)" -ne 0 ]; then
+    echo "ERROR: eclipse-install must be run as root."
+    echo "  Run: sudo eclipse-install"
+    exit 1
+fi
+
+for cmd in dialog parted rsync grub-install blkid; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+        echo "ERROR: Required command '$cmd' not found."
+        exit 1
+    fi
+done
+
+# Check source filesystem
+if [ ! -d "$SQUASHFS_MOUNT" ] || [ ! -f "$SQUASHFS_MOUNT/sbin/dynamod-init" ]; then
+    SQUASHFS_MOUNT=""
+    for alt in /run/dynamod/live/squash /run/rootfsbase /; do
+        if [ -f "$alt/sbin/dynamod-init" ]; then
+            SQUASHFS_MOUNT="$alt"
+            break
+        fi
+    done
+    if [ -z "$SQUASHFS_MOUNT" ]; then
+        echo "ERROR: Cannot find Eclipse Linux root filesystem to install from."
+        echo "  This installer is meant to run from the live ISO."
+        exit 1
+    fi
+fi
+
+> "$LOG"
+log "Eclipse Linux Installer started"
+log "Source: $SQUASHFS_MOUNT"
+
+# ============================================================
+# Step 1: Welcome
+# ============================================================
+dialog --backtitle "$BACKTITLE" --title "$TITLE" \
+    --yesno "Welcome to the Eclipse Linux installer.\n\n\
+Eclipse Linux is a Void Linux-based distribution using the\n\
+dynamod init system.\n\n\
+This will guide you through installing Eclipse Linux to a disk.\n\
+All data on the selected disk will be destroyed.\n\n\
+Continue?" 15 65 || exit 0
+
+# ============================================================
+# Step 2: Disk Selection
+# ============================================================
+DISK_LIST=""
+for dev in /sys/block/sd* /sys/block/vd* /sys/block/nvme*; do
+    [ -d "$dev" ] || continue
+    devname="/dev/$(basename "$dev")"
+    [ -b "$devname" ] || continue
+    # Skip if it's the live media (mounted as ISO)
+    if mount | grep -q "^$devname "; then
+        continue
+    fi
+    size_bytes=$(cat "$dev/size" 2>/dev/null || echo 0)
+    size_gb=$(( size_bytes * 512 / 1073741824 ))
+    [ "$size_gb" -lt 1 ] && continue
+    model=$(cat "$dev/device/model" 2>/dev/null | tr -s ' ' || echo "Unknown")
+    DISK_LIST="$DISK_LIST $devname \"${size_gb}GB - $model\" "
+done
+
+if [ -z "$DISK_LIST" ]; then
+    die "No suitable disks found."
+fi
+
+DISK=$(eval dialog --backtitle "\"$BACKTITLE\"" --title "\"Select Disk\"" \
+    --menu "\"Choose a disk to install Eclipse Linux to.\nWARNING: All data on the selected disk will be erased.\"" \
+    18 65 6 $DISK_LIST 3>&1 1>&2 2>&3) || exit 0
+
+log "Selected disk: $DISK"
+
+# Confirm disk selection
+DISK_INFO=$(lsblk -no NAME,SIZE,MODEL "$DISK" 2>/dev/null | head -1)
+dialog --backtitle "$BACKTITLE" --title "Confirm Disk" \
+    --yesno "You selected:\n\n  $DISK ($DISK_INFO)\n\n\
+ALL DATA ON THIS DISK WILL BE DESTROYED.\n\n\
+Are you sure?" 12 60 || exit 0
+
+# ============================================================
+# Step 3: Boot Mode (UEFI vs BIOS)
+# ============================================================
+UEFI=false
+if [ -d /sys/firmware/efi ]; then
+    UEFI=true
+    BOOT_MODE="UEFI"
+else
+    BOOT_MODE="BIOS (Legacy)"
+fi
+
+dialog --backtitle "$BACKTITLE" --title "Boot Mode" \
+    --msgbox "Detected boot mode: $BOOT_MODE\n\n\
+The disk will be partitioned accordingly:\n\n\
+$(if $UEFI; then
+    echo "  GPT partition table\n  512MB EFI System Partition (FAT32)\n  Remaining space: root partition"
+else
+    echo "  GPT partition table\n  2MB BIOS boot partition\n  Remaining space: root partition"
+fi)" 14 60
+
+log "Boot mode: $BOOT_MODE (UEFI=$UEFI)"
+
+# ============================================================
+# Step 4: Filesystem Selection
+# ============================================================
+FS_TYPE=$(dialog --backtitle "$BACKTITLE" --title "Filesystem" \
+    --menu "Choose a filesystem for the root partition:" 12 50 4 \
+    ext4  "ext4 (recommended, stable)" \
+    btrfs "Btrfs (snapshots, compression)" \
+    xfs   "XFS (high performance)" \
+    3>&1 1>&2 2>&3) || exit 0
+
+log "Filesystem: $FS_TYPE"
+
+# ============================================================
+# Step 5: Hostname
+# ============================================================
+HOSTNAME=$(dialog --backtitle "$BACKTITLE" --title "Hostname" \
+    --inputbox "Enter a hostname for this system:" 8 50 "eclipse" \
+    3>&1 1>&2 2>&3) || exit 0
+
+if [ -z "$HOSTNAME" ]; then
+    HOSTNAME="eclipse"
+fi
+
+log "Hostname: $HOSTNAME"
+
+# ============================================================
+# Step 6: Root Password
+# ============================================================
+while true; do
+    PASS1=$(dialog --backtitle "$BACKTITLE" --title "Root Password" \
+        --insecure --passwordbox "Enter root password:" 8 50 \
+        3>&1 1>&2 2>&3) || exit 0
+
+    if [ -z "$PASS1" ]; then
+        dialog --backtitle "$BACKTITLE" --title "Warning" \
+            --yesno "No password set. Root account will have no password.\n\nContinue without a password?" 8 50 && break || continue
+    fi
+
+    PASS2=$(dialog --backtitle "$BACKTITLE" --title "Root Password" \
+        --insecure --passwordbox "Confirm root password:" 8 50 \
+        3>&1 1>&2 2>&3) || exit 0
+
+    if [ "$PASS1" = "$PASS2" ]; then
+        break
+    fi
+
+    dialog --backtitle "$BACKTITLE" --title "Error" \
+        --msgbox "Passwords do not match. Please try again." 6 50
+done
+
+# ============================================================
+# Step 7: Timezone
+# ============================================================
+REGION_LIST=""
+for region in /usr/share/zoneinfo/Africa /usr/share/zoneinfo/America \
+              /usr/share/zoneinfo/Antarctica /usr/share/zoneinfo/Arctic \
+              /usr/share/zoneinfo/Asia /usr/share/zoneinfo/Atlantic \
+              /usr/share/zoneinfo/Australia /usr/share/zoneinfo/Europe \
+              /usr/share/zoneinfo/Indian /usr/share/zoneinfo/Pacific \
+              /usr/share/zoneinfo/US; do
+    [ -d "$region" ] || continue
+    name=$(basename "$region")
+    REGION_LIST="$REGION_LIST $name \"\""
+done
+
+if [ -n "$REGION_LIST" ]; then
+    TZ_REGION=$(eval dialog --backtitle "\"$BACKTITLE\"" --title "\"Timezone Region\"" \
+        --menu "\"Select timezone region:\"" 20 50 10 $REGION_LIST \
+        3>&1 1>&2 2>&3) || TZ_REGION=""
+
+    if [ -n "$TZ_REGION" ]; then
+        CITY_LIST=""
+        for city in /usr/share/zoneinfo/"$TZ_REGION"/*; do
+            [ -f "$city" ] || continue
+            name=$(basename "$city")
+            CITY_LIST="$CITY_LIST $name \"\""
+        done
+
+        TZ_CITY=$(eval dialog --backtitle "\"$BACKTITLE\"" --title "\"Timezone\"" \
+            --menu "\"Select city:\"" 20 50 10 $CITY_LIST \
+            3>&1 1>&2 2>&3) || TZ_CITY=""
+
+        if [ -n "$TZ_CITY" ]; then
+            TIMEZONE="$TZ_REGION/$TZ_CITY"
+        else
+            TIMEZONE="UTC"
+        fi
+    else
+        TIMEZONE="UTC"
+    fi
+else
+    TIMEZONE="UTC"
+fi
+
+log "Timezone: $TIMEZONE"
+
+# ============================================================
+# Step 8: Summary and Confirmation
+# ============================================================
+dialog --backtitle "$BACKTITLE" --title "Installation Summary" \
+    --yesno "\
+The following will be performed:\n\n\
+  Disk:        $DISK\n\
+  Boot mode:   $BOOT_MODE\n\
+  Filesystem:  $FS_TYPE\n\
+  Hostname:    $HOSTNAME\n\
+  Timezone:    $TIMEZONE\n\
+  Password:    $([ -n "$PASS1" ] && echo '(set)' || echo '(none)')\n\n\
+ALL DATA ON $DISK WILL BE DESTROYED.\n\n\
+Proceed with installation?" 18 60 || exit 0
+
+# ============================================================
+# Step 9: Installation
+# ============================================================
+(
+echo "0"
+echo "XXX"
+echo "Partitioning disk..."
+echo "XXX"
+
+log "Partitioning $DISK..."
+wipefs -af "$DISK" >> "$LOG" 2>&1
+
+if $UEFI; then
+    parted -s "$DISK" \
+        mklabel gpt \
+        mkpart ESP fat32 1MiB 513MiB \
+        set 1 esp on \
+        mkpart root "$FS_TYPE" 513MiB 100% >> "$LOG" 2>&1
+
+    # Determine partition naming (nvme uses p1, sd uses 1)
+    if echo "$DISK" | grep -q "nvme"; then
+        EFI_PART="${DISK}p1"
+        ROOT_PART="${DISK}p2"
+    else
+        EFI_PART="${DISK}1"
+        ROOT_PART="${DISK}2"
+    fi
+else
+    parted -s "$DISK" \
+        mklabel gpt \
+        mkpart bios 1MiB 3MiB \
+        set 1 bios_grub on \
+        mkpart root "$FS_TYPE" 3MiB 100% >> "$LOG" 2>&1
+
+    if echo "$DISK" | grep -q "nvme"; then
+        ROOT_PART="${DISK}p2"
+    else
+        ROOT_PART="${DISK}2"
+    fi
+    EFI_PART=""
+fi
+
+# Wait for partition devices
+sleep 2
+partprobe "$DISK" 2>/dev/null || true
+sleep 1
+
+echo "15"
+echo "XXX"
+echo "Formatting partitions..."
+echo "XXX"
+
+log "Formatting partitions..."
+
+if [ -n "$EFI_PART" ]; then
+    mkfs.fat -F 32 -n ECLIPSE_EFI "$EFI_PART" >> "$LOG" 2>&1
+fi
+
+case "$FS_TYPE" in
+    ext4)
+        mkfs.ext4 -q -L eclipse-root "$ROOT_PART" >> "$LOG" 2>&1
+        ;;
+    btrfs)
+        mkfs.btrfs -f -L eclipse-root "$ROOT_PART" >> "$LOG" 2>&1
+        ;;
+    xfs)
+        mkfs.xfs -f -L eclipse-root "$ROOT_PART" >> "$LOG" 2>&1
+        ;;
+esac
+
+echo "25"
+echo "XXX"
+echo "Mounting target filesystem..."
+echo "XXX"
+
+log "Mounting target..."
+mkdir -p "$TARGET_MNT"
+mount "$ROOT_PART" "$TARGET_MNT"
+
+if [ -n "$EFI_PART" ]; then
+    mkdir -p "$TARGET_MNT/boot/efi"
+    mount "$EFI_PART" "$TARGET_MNT/boot/efi"
+fi
+
+echo "30"
+echo "XXX"
+echo "Copying system files (this may take several minutes)..."
+echo "XXX"
+
+log "Copying rootfs from $SQUASHFS_MOUNT to $TARGET_MNT..."
+rsync -aHAXx --info=progress2 \
+    --exclude='/run/*' \
+    --exclude='/tmp/*' \
+    --exclude='/proc/*' \
+    --exclude='/sys/*' \
+    --exclude='/dev/*' \
+    "$SQUASHFS_MOUNT/" "$TARGET_MNT/" >> "$LOG" 2>&1
+
+mkdir -p "$TARGET_MNT/run" "$TARGET_MNT/tmp" "$TARGET_MNT/proc" "$TARGET_MNT/sys" "$TARGET_MNT/dev"
+chmod 1777 "$TARGET_MNT/tmp"
+
+echo "70"
+echo "XXX"
+echo "Generating fstab..."
+echo "XXX"
+
+log "Generating fstab..."
+ROOT_UUID=$(blkid -s UUID -o value "$ROOT_PART")
+cat > "$TARGET_MNT/etc/fstab" <<FSTAB
+# Eclipse Linux fstab - generated by eclipse-install
+UUID=$ROOT_UUID    /         $FS_TYPE    defaults    0 1
+FSTAB
+
+if [ -n "$EFI_PART" ]; then
+    EFI_UUID=$(blkid -s UUID -o value "$EFI_PART")
+    echo "UUID=$EFI_UUID    /boot/efi vfat    defaults,umask=0077    0 2" >> "$TARGET_MNT/etc/fstab"
+fi
+
+echo "75"
+echo "XXX"
+echo "Configuring system..."
+echo "XXX"
+
+log "Configuring system..."
+
+echo "$HOSTNAME" > "$TARGET_MNT/etc/hostname"
+cat > "$TARGET_MNT/etc/hosts" <<HOSTS
+127.0.0.1   localhost
+::1         localhost
+127.0.1.1   $HOSTNAME
+HOSTS
+
+# Timezone
+if [ -f "/usr/share/zoneinfo/$TIMEZONE" ]; then
+    ln -sf "/usr/share/zoneinfo/$TIMEZONE" "$TARGET_MNT/etc/localtime"
+fi
+
+# Set root password
+mount --bind /proc "$TARGET_MNT/proc"
+mount --bind /dev  "$TARGET_MNT/dev"
+mount --bind /sys  "$TARGET_MNT/sys"
+
+if [ -n "$PASS1" ]; then
+    echo "root:$PASS1" | chroot "$TARGET_MNT" chpasswd >> "$LOG" 2>&1
+else
+    chroot "$TARGET_MNT" passwd -d root >> "$LOG" 2>&1
+fi
+
+# Remove live-environment artifacts
+rm -f "$TARGET_MNT/etc/profile.d/eclipse-live.sh"
+
+# Ensure resolv.conf exists for first boot
+echo "nameserver 8.8.8.8" > "$TARGET_MNT/etc/resolv.conf"
+
+echo "100"
+echo "XXX"
+echo "Base system installed. Configuring bootloader..."
+echo "XXX"
+
+) | dialog --backtitle "$BACKTITLE" --title "Installing Eclipse Linux" \
+    --gauge "Preparing..." 8 60 0
+
+# ============================================================
+# Bootloader & initramfs — runs outside the gauge subshell.
+# chroot inside a pipeline subshell gets killed by signals on
+# some shells (busybox ash); running here avoids that entirely.
+# ============================================================
+dialog --backtitle "$BACKTITLE" --title "Configuring Bootloader" \
+    --infobox "Installing GRUB bootloader..." 4 50
+
+# Re-derive partition paths (subshell variables don't persist)
+if echo "$DISK" | grep -q "nvme"; then
+    ROOT_PART="${DISK}p2"
+    $UEFI && EFI_PART="${DISK}p1" || EFI_PART=""
+else
+    ROOT_PART="${DISK}2"
+    $UEFI && EFI_PART="${DISK}1" || EFI_PART=""
+fi
+ROOT_UUID=$(blkid -s UUID -o value "$ROOT_PART")
+
+
+log "Installing GRUB..."
+
+if $UEFI; then
+    chroot "$TARGET_MNT" grub-install \
+        --target=x86_64-efi \
+        --efi-directory=/boot/efi \
+        --bootloader-id=eclipse \
+        --removable >> "$LOG" 2>&1 || log "grub-install (UEFI) failed"
+else
+    GRUB_MODS="part_gpt part_msdos ext2 btrfs xfs fat normal configfile linux search echo test all_video"
+    chroot "$TARGET_MNT" grub-install \
+        --target=i386-pc \
+        --modules="$GRUB_MODS" \
+        "$DISK" >> "$LOG" 2>&1 || {
+            log "chroot grub-install failed, trying from live env..."
+            grub-install \
+                --target=i386-pc \
+                --boot-directory="$TARGET_MNT/boot" \
+                --modules="$GRUB_MODS" \
+                "$DISK" >> "$LOG" 2>&1 || log "grub-install failed in both attempts"
+        }
+
+    if [ ! -f "$TARGET_MNT/boot/grub/i386-pc/normal.mod" ]; then
+        GRUB_MOD_SRC=""
+        for d in "$TARGET_MNT/usr/lib/grub/i386-pc" "/usr/lib/grub/i386-pc" \
+                 "$TARGET_MNT/usr/share/grub/i386-pc" "/usr/share/grub/i386-pc"; do
+            [ -d "$d" ] && [ -f "$d/normal.mod" ] && GRUB_MOD_SRC="$d" && break
+        done
+        if [ -n "$GRUB_MOD_SRC" ]; then
+            mkdir -p "$TARGET_MNT/boot/grub/i386-pc"
+            cp "$GRUB_MOD_SRC/"*.mod "$TARGET_MNT/boot/grub/i386-pc/"
+            cp "$GRUB_MOD_SRC/"*.lst "$TARGET_MNT/boot/grub/i386-pc/" 2>/dev/null || true
+        fi
+    fi
+fi
+
+# GRUB config
+GRUB_CFG_DIR="$TARGET_MNT/boot/grub"
+[ -d "$TARGET_MNT/boot/grub2" ] && GRUB_CFG_DIR="$TARGET_MNT/boot/grub2"
+mkdir -p "$GRUB_CFG_DIR"
+
+INST_KVER=""
+for k in "$TARGET_MNT"/boot/vmlinuz-*; do
+    [ -f "$k" ] && INST_KVER="$(basename "$k" | sed 's/^vmlinuz-//')" && break
+done
+cat > "$GRUB_CFG_DIR/grub.cfg" <<GRUBCFG
+set timeout=5
+set default=0
+
+menuentry "Eclipse Linux" {
+    linux /boot/vmlinuz-${INST_KVER} root=UUID=${ROOT_UUID} rootfstype=${FS_TYPE} rootwait rdinit=/sbin/dynamod-init init=/sbin/dynamod-init quiet
+    initrd /boot/initramfs-${INST_KVER}.gz
+}
+
+menuentry "Eclipse Linux (serial console)" {
+    linux /boot/vmlinuz-${INST_KVER} root=UUID=${ROOT_UUID} rootfstype=${FS_TYPE} rootwait rdinit=/sbin/dynamod-init init=/sbin/dynamod-init console=ttyS0,115200
+    initrd /boot/initramfs-${INST_KVER}.gz
+}
+
+menuentry "Eclipse Linux (recovery)" {
+    linux /boot/vmlinuz-${INST_KVER} root=UUID=${ROOT_UUID} rootfstype=${FS_TYPE} rootwait rdinit=/sbin/dynamod-init init=/sbin/dynamod-init single
+    initrd /boot/initramfs-${INST_KVER}.gz
+}
+GRUBCFG
+
+# Build initramfs for the installed system
+dialog --backtitle "$BACKTITLE" --title "Configuring Bootloader" \
+    --infobox "Building initramfs..." 4 50
+
+log "Building installed initramfs..."
+INST_INITRAMFS_DIR=$(mktemp -d)
+mkdir -p "$INST_INITRAMFS_DIR/sbin" "$INST_INITRAMFS_DIR/bin" \
+         "$INST_INITRAMFS_DIR/dev" "$INST_INITRAMFS_DIR/proc" \
+         "$INST_INITRAMFS_DIR/sys" "$INST_INITRAMFS_DIR/newroot" \
+         "$INST_INITRAMFS_DIR/etc" "$INST_INITRAMFS_DIR/lib"
+cp "$TARGET_MNT/sbin/dynamod-init" "$INST_INITRAMFS_DIR/sbin/dynamod-init"
+
+INST_BUSYBOX=""
+for bb in "$TARGET_MNT/usr/bin/busybox" "$TARGET_MNT/bin/busybox"; do
+    [ -f "$bb" ] && INST_BUSYBOX="$bb" && break
+done
+if [ -n "$INST_BUSYBOX" ]; then
+    cp "$INST_BUSYBOX" "$INST_INITRAMFS_DIR/bin/busybox"
+    for cmd in sh mount umount losetup blkid switch_root; do
+        ln -sf busybox "$INST_INITRAMFS_DIR/bin/$cmd"
+    done
+fi
+
+INST_KMOD=""
+for km in "$TARGET_MNT/usr/bin/kmod" "$TARGET_MNT/bin/kmod"; do
+    [ -f "$km" ] && INST_KMOD="$km" && break
+done
+if [ -n "$INST_KMOD" ]; then
+    cp "$INST_KMOD" "$INST_INITRAMFS_DIR/bin/kmod"
+    ln -sf kmod "$INST_INITRAMFS_DIR/bin/modprobe"
+    ln -sf ../bin/modprobe "$INST_INITRAMFS_DIR/sbin/modprobe"
+
+    mkdir -p "$INST_INITRAMFS_DIR/lib" "$INST_INITRAMFS_DIR/usr/lib64" "$INST_INITRAMFS_DIR/usr/lib"
+    for ld in "$TARGET_MNT"/lib/ld-musl-*.so*; do
+        [ -e "$ld" ] || continue
+        cp -a "$ld" "$INST_INITRAMFS_DIR/lib/"
+    done
+    for libc in "$TARGET_MNT"/usr/lib64/libc.so "$TARGET_MNT"/usr/lib/libc.so "$TARGET_MNT"/lib/libc.so; do
+        [ -f "$libc" ] || continue
+        cp -a "$libc" "$INST_INITRAMFS_DIR$(echo "$libc" | sed "s|^$TARGET_MNT||")"
+    done
+    for pattern in libzstd liblzma libcrypto libz; do
+        for lib in "$TARGET_MNT"/usr/lib/${pattern}.so* "$TARGET_MNT"/lib/${pattern}.so* \
+                   "$TARGET_MNT"/usr/lib64/${pattern}.so*; do
+            [ -e "$lib" ] || continue
+            dest="$INST_INITRAMFS_DIR$(echo "$lib" | sed "s|^$TARGET_MNT||")"
+            mkdir -p "$(dirname "$dest")"
+            cp -a "$lib" "$dest"
+        done
+    done
+else
+    ln -sf busybox "$INST_INITRAMFS_DIR/bin/modprobe"
+    ln -sf ../bin/modprobe "$INST_INITRAMFS_DIR/sbin/modprobe"
+fi
+
+if [ -n "$INST_KVER" ] && [ -d "$TARGET_MNT/lib/modules/$INST_KVER" ]; then
+    mkdir -p "$INST_INITRAMFS_DIR/lib/modules"
+    cp -a "$TARGET_MNT/lib/modules/$INST_KVER" "$INST_INITRAMFS_DIR/lib/modules/$INST_KVER"
+fi
+
+cd "$INST_INITRAMFS_DIR"
+find . -print0 | cpio --null -o --format=newc 2>/dev/null | gzip -9 > "$TARGET_MNT/boot/initramfs-${INST_KVER}.gz"
+cd /
+rm -rf "$INST_INITRAMFS_DIR"
+
+# Cleanup mounts
+log "Cleanup..."
+umount "$TARGET_MNT/proc" 2>/dev/null || true
+umount "$TARGET_MNT/dev"  2>/dev/null || true
+umount "$TARGET_MNT/sys"  2>/dev/null || true
+if [ -n "$EFI_PART" ]; then
+    umount "$TARGET_MNT/boot/efi" 2>/dev/null || true
+fi
+umount "$TARGET_MNT" 2>/dev/null || true
+
+trap - EXIT
+
+# ============================================================
+# Step 10: Done
+# ============================================================
+dialog --backtitle "$BACKTITLE" --title "Installation Complete" \
+    --yesno "Eclipse Linux has been installed successfully!\n\n\
+You can now reboot into your new system.\n\
+Remove the installation media before rebooting.\n\n\
+Reboot now?" 12 55
+
+if [ $? -eq 0 ]; then
+    log "Rebooting..."
+    dynamodctl shutdown reboot 2>/dev/null || reboot
+fi
