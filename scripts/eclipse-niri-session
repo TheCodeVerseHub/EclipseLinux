@@ -1,0 +1,39 @@
+#!/bin/sh
+# Start niri on Eclipse Linux (dynamod, seatd, no systemd user session).
+# Prefer this over raw `niri --session`: session D-Bus, udev settle, short delay for libinput.
+
+export LIBSEAT_BACKEND=seatd
+: "${XDG_RUNTIME_DIR:=/run/user/$(id -u)}"
+mkdir -m 0700 -p "$XDG_RUNTIME_DIR" 2>/dev/null || true
+
+# Mesa: ensure DRI drivers resolve (musl/live); avoid llvmpipe being picked for virtio
+# (niri skips "software" EGL devices — then the first DRM device has no allocator yet).
+export LIBGL_DRIVERS_PATH=/usr/lib/dri
+modprobe virtio_gpu 2>/dev/null || true
+if [ -z "${MESA_LOADER_DRIVER_OVERRIDE+x}" ]; then
+	for c in /sys/class/drm/card[0-9]/device/uevent; do
+		[ -r "$c" ] || continue
+		if grep -q '^DRIVER=virtio_gpu$' "$c" 2>/dev/null; then
+			export MESA_LOADER_DRIVER_OVERRIDE=virtio_gpu
+			break
+		fi
+	done
+fi
+
+tty_line=$(tty 2>/dev/null || true)
+case "$tty_line" in
+/dev/tty[0-9]*) ;;
+*)
+	printf '%s\n' "Note: You are not on a virtual console (got: ${tty_line:-unknown})." \
+		"  Niri needs DRM from a local tty (e.g. Ctrl+Alt+F1 → tty1), not only serial/SSH." >&2
+	;;
+esac
+
+udevadm settle --timeout=60 2>/dev/null || true
+# Mitigate libinput vs seat race (see niri #1879 / similar reports).
+sleep 1
+
+if [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
+	exec /usr/bin/niri --session "$@"
+fi
+exec dbus-run-session -- /usr/bin/niri --session "$@"

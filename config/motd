@@ -4,3 +4,8 @@
 
   Run 'eclipse-install' to install to disk.
 
+  Graphical session: on tty1 run:
+    eclipse-niri-session
+  (Uses niri --session + session D-Bus; not plain `niri`.)
+  Manual fallback: dbus-run-session niri --session
+

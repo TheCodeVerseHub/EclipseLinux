@@ -42,8 +42,8 @@ test-qemu:
 		-boot d \
 		-m 2048M \
 		-smp 2 \
-		-vga virtio \
-		-display gtk
+		-device virtio-vga-gl \
+		-display gtk,gl=on
 
 test-qemu-serial:
 	@[ -f $(ISO_FILE) ] || { echo "ERROR: $(ISO_FILE) not found. Run 'make iso' first."; exit 1; }
@@ -84,7 +84,7 @@ test-qemu-install:
 		-m 2048M \
 		-smp 2 \
 		-vga virtio \
-		-display gtk
+		-display gtk,gl=on
 
 clean:
 	rm -rf $(BUILD_DIR)
