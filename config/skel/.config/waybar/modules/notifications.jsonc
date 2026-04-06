@@ -1,0 +1,24 @@
+{
+  // ───────── Notifications ─────────
+  "custom/notifications": {
+    "tooltip": false,
+    "format": "{icon}",
+    "format-icons": {
+      "notification": "󱅫",
+      "none": "󰂚",
+      "dnd-notification": "󰂛",
+      "dnd-none": "󰂛",
+      "inhibited-notification": "󱅫",
+      "inhibited-none": "󰂚",
+      "dnd-inhibited-notification": "󰂛",
+      "dnd-inhibited-none": "󰂛"
+    },
+    "return-type": "json",
+    "exec-if": "which makoctl",
+    "exec": "echo '{\"text\":\"\",\"tooltip\":\"Mako Notifications\",\"class\":\"none\",\"alt\":\"none\"}'",
+    "interval": "once",
+    "on-click": "~/.config/waybar/scripts/mako-history.sh",
+    "on-click-right": "makoctl dismiss -a && notify-send -u low 'Notifications' 'All cleared'",
+    "escape": true
+  }
+}

@@ -1,0 +1,38 @@
+[
+    {
+        "label" : "lock",
+        "action" : "swaylock",
+        "text" : "Lock",
+        "keybind" : "l"
+    },
+    {
+        "label" : "hibernate",
+        "action" : "sh -c 'echo disk | tee /sys/power/state'",
+        "text" : "Hibernate",
+        "keybind" : "h"
+    },
+    {
+        "label" : "logout",
+        "action" : "niri msg action quit",
+        "text" : "Logout",
+        "keybind" : "e"
+    },
+    {
+        "label" : "shutdown",
+        "action" : "poweroff",
+        "text" : "Shutdown",
+        "keybind" : "s"
+    },
+    {
+        "label" : "suspend",
+        "action" : "sh -c 'echo mem | tee /sys/power/state'",
+        "text" : "Suspend",
+        "keybind" : "u"
+    },
+    {
+        "label" : "reboot",
+        "action" : "reboot",
+        "text" : "Reboot",
+        "keybind" : "r"
+    }
+]

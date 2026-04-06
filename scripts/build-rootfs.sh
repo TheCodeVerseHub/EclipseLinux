@@ -149,7 +149,6 @@ chroot "$ROOTFS" xbps-install -Sy -y \
     util-linux \
     busybox \
     ca-certificates \
-    dhcpcd \
     niri \
     seatd \
     mesa \
@@ -163,10 +162,68 @@ chroot "$ROOTFS" xbps-install -Sy -y \
     fuzzel \
     Waybar \
     xwayland-satellite \
+    wlogout \
+    mako \
+    swaylock \
+    swappy \
+    swaybg \
+    wl-clipboard \
+    cliphist \
+    polkit-gnome \
+    pipewire \
+    wireplumber \
+    playerctl \
+    brightnessctl \
+    cava \
+    mpv \
+    fish-shell \
+    starship \
+    yazi \
+    ranger \
+    bottom \
+    lazygit \
+    tmux \
+    lsd \
+    zoxide \
+    jq \
+    python3 \
+    NetworkManager \
+    network-manager-applet \
+    gnome-keyring \
+    font-awesome6 \
     linux-firmware-amd \
     linux-firmware-intel \
     linux-firmware-nvidia \
     linux-firmware-network
+
+# ============================================================
+# Install Nerd Fonts and Bibata cursor theme
+# ============================================================
+echo "Installing Nerd Fonts..."
+NERD_FONTS_VER="v3.4.0"
+mkdir -p "$ROOTFS/usr/share/fonts/nerd-fonts"
+for font in JetBrainsMono FiraCode RobotoMono; do
+    if [ ! -f "$CACHE_DIR/${font}.zip" ]; then
+        echo "  Downloading ${font} Nerd Font..."
+        wget -q --show-progress -O "$CACHE_DIR/${font}.zip" \
+            "https://github.com/ryanoasis/nerd-fonts/releases/download/${NERD_FONTS_VER}/${font}.zip" || {
+            echo "WARNING: Failed to download ${font} Nerd Font, skipping."
+            continue
+        }
+    fi
+    unzip -qo "$CACHE_DIR/${font}.zip" -d "$ROOTFS/usr/share/fonts/nerd-fonts/" '*.ttf' 2>/dev/null || true
+done
+
+echo "Installing Bibata cursor theme..."
+if [ ! -f "$CACHE_DIR/Bibata-Modern-Classic.tar.xz" ]; then
+    wget -q --show-progress -O "$CACHE_DIR/Bibata-Modern-Classic.tar.xz" \
+        "https://github.com/ful1e5/Bibata_Cursor/releases/latest/download/Bibata-Modern-Classic.tar.xz" || {
+        echo "WARNING: Failed to download Bibata cursor theme, skipping."
+    }
+fi
+if [ -f "$CACHE_DIR/Bibata-Modern-Classic.tar.xz" ]; then
+    tar xJf "$CACHE_DIR/Bibata-Modern-Classic.tar.xz" -C "$ROOTFS/usr/share/icons/"
+fi
 
 # ============================================================
 # Install dynamod binaries
@@ -301,12 +358,12 @@ stop-signal = "SIGHUP"
 stop-timeout = "3s"
 GETTY_S
 
-# DHCP service for live environment networking
-cat > "$ROOTFS/etc/dynamod/services/dhcpcd.toml" <<'DHCP'
+# NetworkManager service for desktop networking (WiFi, VPN, etc.)
+cat > "$ROOTFS/etc/dynamod/services/NetworkManager.toml" <<'NM'
 [service]
-name = "dhcpcd"
+name = "NetworkManager"
 supervisor = "root"
-exec = ["/usr/sbin/dhcpcd", "--nobackground", "-f", "/etc/dhcpcd.conf"]
+exec = ["/usr/bin/NetworkManager", "--no-daemon"]
 type = "simple"
 
 [restart]
@@ -316,7 +373,7 @@ max-restarts = 5
 max-restart-window = "60s"
 
 [dependencies]
-after = ["network", "udev-coldplug"]
+after = ["dbus", "udev-coldplug"]
 
 [readiness]
 type = "none"
@@ -324,7 +381,7 @@ type = "none"
 [shutdown]
 stop-signal = "SIGTERM"
 stop-timeout = "10s"
-DHCP
+NM
 
 # seatd: libseat provider for niri (LIBSEAT_BACKEND=seatd in profile.d).
 # SEATD_VTBOUND=0 on the *daemon* avoids hangs in QEMU/virtio where VT-based seat
@@ -451,6 +508,25 @@ if [ -d /run/dynamod/live ]; then
 fi
 PROFILE
 chmod 644 "$ROOTFS/etc/profile.d/eclipse-live.sh"
+
+# ============================================================
+# Deploy user dotfiles (niri desktop environment configs)
+# ============================================================
+echo "Installing Eclipse desktop configs..."
+
+cp -a "$PROJECT_ROOT/config/skel/." "$ROOTFS/etc/skel/"
+
+mkdir -p "$ROOTFS/root"
+cp -a "$PROJECT_ROOT/config/skel/.config" "$ROOTFS/root/.config"
+chmod 755 "$ROOTFS/root/.config/niri/autostart.sh"
+chmod 755 "$ROOTFS/root/.config/ranger/scope.sh"
+
+mkdir -p "$ROOTFS/usr/share/eclipse/wlogout/icons"
+cp "$PROJECT_ROOT/config/skel/.config/wlogout/icons/"*.png \
+    "$ROOTFS/usr/share/eclipse/wlogout/icons/"
+
+# Set fish as the default shell in alacritty (root keeps /bin/sh for recovery)
+# Fish is launched via alacritty's shell config: shell = { program = "/usr/bin/fish" }
 
 # ============================================================
 # Cleanup
