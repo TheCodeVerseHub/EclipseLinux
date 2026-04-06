@@ -517,7 +517,7 @@ echo "Installing Eclipse desktop configs..."
 cp -a "$PROJECT_ROOT/config/skel/." "$ROOTFS/etc/skel/"
 
 mkdir -p "$ROOTFS/root"
-cp -a "$PROJECT_ROOT/config/skel/.config" "$ROOTFS/root/.config"
+cp -a "$PROJECT_ROOT/config/skel/." "$ROOTFS/root/"
 chmod 755 "$ROOTFS/root/.config/niri/autostart.sh"
 chmod 755 "$ROOTFS/root/.config/ranger/scope.sh"
 
