@@ -642,7 +642,9 @@ menuentry "Eclipse Linux (recovery)" {{
 fn build_initramfs(kver: &str) -> Result<(), String> {
     log::log("Building installed initramfs...");
 
-    let output = run_cmd("mktemp", &["-d"])?;
+    // Create staging dir on the target disk, not /tmp (which is a tiny
+    // tmpfs on the live ISO and cannot hold the kernel modules tree).
+    let output = run_cmd("mktemp", &["-d", "-p", TARGET_MNT])?;
     let staging = String::from_utf8_lossy(&output.stdout).trim().to_string();
     log::log(&format!("Initramfs staging dir: {}", staging));
 
