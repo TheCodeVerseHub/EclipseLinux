@@ -3,5 +3,5 @@ build/
 *.img
 *.squashfs
 dynamod/
-
+eclipse-installer/target
 

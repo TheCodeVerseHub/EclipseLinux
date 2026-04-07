@@ -1,4 +1,4 @@
-.PHONY: all dynamod rootfs iso clean distclean test-qemu test-qemu-serial test-qemu-install
+.PHONY: all dynamod installer rootfs iso clean distclean test-qemu test-qemu-serial test-qemu-install
 
 ECLIPSE_VERSION ?= 0.1.0
 BUILD_DIR       := $(CURDIR)/build
@@ -17,6 +17,16 @@ all: iso
 # Do NOT run this target under sudo.
 dynamod:
 	$(MAKE) -C $(DYNAMOD_DIR)
+
+# GUI installer — builds as the current user.
+# Requires: rustup target add x86_64-unknown-linux-musl && sudo pacman -S musl
+# Do NOT run this target under sudo.
+INSTALLER_DIR   := $(CURDIR)/eclipse-installer
+INSTALLER_BIN   := $(INSTALLER_DIR)/target/x86_64-unknown-linux-musl/release/eclipse-installer
+
+installer:
+	cargo build --manifest-path $(INSTALLER_DIR)/Cargo.toml \
+		--target x86_64-unknown-linux-musl --release
 
 # rootfs and iso require root for chroot/mount/losetup.
 # They invoke sudo internally so the top-level `make` can run unprivileged.
@@ -83,7 +93,7 @@ test-qemu-install:
 		-boot d \
 		-m 2048M \
 		-smp 2 \
-		-vga virtio \
+		-device virtio-vga-gl \
 		-display gtk,gl=on
 
 clean:

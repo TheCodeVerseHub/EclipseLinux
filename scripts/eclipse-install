@@ -194,7 +194,55 @@ while true; do
 done
 
 # ============================================================
-# Step 7: Timezone
+# Step 7: User Account
+# ============================================================
+while true; do
+    USERNAME=$(dialog --backtitle "$BACKTITLE" --title "User Account" \
+        --inputbox "Enter a username for the primary user account:" 8 50 \
+        3>&1 1>&2 2>&3) || exit 0
+
+    if [ -z "$USERNAME" ]; then
+        dialog --backtitle "$BACKTITLE" --title "Error" \
+            --msgbox "Username cannot be empty." 6 40
+        continue
+    fi
+
+    # Validate: lowercase alphanumeric, hyphens, underscores; must start with a letter
+    if ! echo "$USERNAME" | grep -qE '^[a-z][a-z0-9_-]*$'; then
+        dialog --backtitle "$BACKTITLE" --title "Error" \
+            --msgbox "Invalid username. Use lowercase letters, digits, hyphens,\nor underscores. Must start with a letter." 8 55
+        continue
+    fi
+
+    break
+done
+
+log "Username: $USERNAME"
+
+while true; do
+    USER_PASS1=$(dialog --backtitle "$BACKTITLE" --title "User Password" \
+        --insecure --passwordbox "Enter password for $USERNAME:" 8 50 \
+        3>&1 1>&2 2>&3) || exit 0
+
+    if [ -z "$USER_PASS1" ]; then
+        dialog --backtitle "$BACKTITLE" --title "Warning" \
+            --yesno "No password set for $USERNAME. Continue without a password?" 8 50 && break || continue
+    fi
+
+    USER_PASS2=$(dialog --backtitle "$BACKTITLE" --title "User Password" \
+        --insecure --passwordbox "Confirm password for $USERNAME:" 8 50 \
+        3>&1 1>&2 2>&3) || exit 0
+
+    if [ "$USER_PASS1" = "$USER_PASS2" ]; then
+        break
+    fi
+
+    dialog --backtitle "$BACKTITLE" --title "Error" \
+        --msgbox "Passwords do not match. Please try again." 6 50
+done
+
+# ============================================================
+# Step 8: Timezone
 # ============================================================
 REGION_LIST=""
 for region in /usr/share/zoneinfo/Africa /usr/share/zoneinfo/America \
@@ -240,7 +288,7 @@ fi
 log "Timezone: $TIMEZONE"
 
 # ============================================================
-# Step 8: Summary and Confirmation
+# Step 9: Summary and Confirmation
 # ============================================================
 dialog --backtitle "$BACKTITLE" --title "Installation Summary" \
     --yesno "\
@@ -249,13 +297,15 @@ The following will be performed:\n\n\
   Boot mode:   $BOOT_MODE\n\
   Filesystem:  $FS_TYPE\n\
   Hostname:    $HOSTNAME\n\
+  User:        $USERNAME\n\
   Timezone:    $TIMEZONE\n\
-  Password:    $([ -n "$PASS1" ] && echo '(set)' || echo '(none)')\n\n\
+  Root pass:   $([ -n "$PASS1" ] && echo '(set)' || echo '(none)')\n\
+  User pass:   $([ -n "$USER_PASS1" ] && echo '(set)' || echo '(none)')\n\n\
 ALL DATA ON $DISK WILL BE DESTROYED.\n\n\
-Proceed with installation?" 18 60 || exit 0
+Proceed with installation?" 20 60 || exit 0
 
 # ============================================================
-# Step 9: Installation
+# Step 10: Installation
 # ============================================================
 (
 echo "0"
@@ -391,16 +441,35 @@ if [ -f "/usr/share/zoneinfo/$TIMEZONE" ]; then
     ln -sf "/usr/share/zoneinfo/$TIMEZONE" "$TARGET_MNT/etc/localtime"
 fi
 
-# Set root password
-mount --bind /proc "$TARGET_MNT/proc"
-mount --bind /dev  "$TARGET_MNT/dev"
-mount --bind /sys  "$TARGET_MNT/sys"
+# Fix /etc/passwd: the live image uses an empty password field for root;
+# restore the 'x' marker so login checks /etc/shadow for the real hash.
+sed -i 's|^root:[^:]*:|root:x:|' "$TARGET_MNT/etc/passwd"
 
-if [ -n "$PASS1" ]; then
-    echo "root:$PASS1" | chroot "$TARGET_MNT" chpasswd >> "$LOG" 2>&1
-else
-    chroot "$TARGET_MNT" passwd -d root >> "$LOG" 2>&1
-fi
+# Replace agetty console login with greetd for graphical login
+rm -f "$TARGET_MNT/etc/dynamod/services/agetty-tty1.toml"
+cat > "$TARGET_MNT/etc/dynamod/services/greetd.toml" <<'GREETD_SVC'
+[service]
+name = "greetd"
+supervisor = "root"
+exec = ["/usr/bin/greetd"]
+type = "simple"
+
+[restart]
+policy = "permanent"
+delay = "2s"
+max-restarts = 5
+max-restart-window = "60s"
+
+[dependencies]
+after = ["dbus", "seatd", "udev-coldplug"]
+
+[readiness]
+type = "none"
+
+[shutdown]
+stop-signal = "SIGTERM"
+stop-timeout = "10s"
+GREETD_SVC
 
 # Remove live-environment artifacts
 rm -f "$TARGET_MNT/etc/profile.d/eclipse-live.sh"
@@ -410,17 +479,42 @@ echo "nameserver 8.8.8.8" > "$TARGET_MNT/etc/resolv.conf"
 
 echo "100"
 echo "XXX"
-echo "Base system installed. Configuring bootloader..."
+echo "Base system installed. Configuring accounts & bootloader..."
 echo "XXX"
 
 ) | dialog --backtitle "$BACKTITLE" --title "Installing Eclipse Linux" \
     --gauge "Preparing..." 8 60 0
 
 # ============================================================
-# Bootloader & initramfs — runs outside the gauge subshell.
+# User accounts, passwords, bootloader & initramfs.
+# All chroot operations run outside the gauge subshell because
 # chroot inside a pipeline subshell gets killed by signals on
-# some shells (busybox ash); running here avoids that entirely.
+# busybox ash.
 # ============================================================
+dialog --backtitle "$BACKTITLE" --title "Configuring System" \
+    --infobox "Setting up user accounts..." 4 50
+
+mount --bind /proc "$TARGET_MNT/proc" 2>/dev/null || true
+mount --bind /dev  "$TARGET_MNT/dev"  2>/dev/null || true
+mount --bind /sys  "$TARGET_MNT/sys"  2>/dev/null || true
+
+# Set root password
+log "Setting root password..."
+if [ -n "$PASS1" ]; then
+    echo "root:$PASS1" | chroot "$TARGET_MNT" chpasswd >> "$LOG" 2>&1
+else
+    chroot "$TARGET_MNT" passwd -d root >> "$LOG" 2>&1
+fi
+
+# Create user account
+log "Creating user $USERNAME..."
+chroot "$TARGET_MNT" useradd -m -G wheel,audio,video,input,_seatd -s /usr/bin/fish "$USERNAME" >> "$LOG" 2>&1
+if [ -n "$USER_PASS1" ]; then
+    echo "$USERNAME:$USER_PASS1" | chroot "$TARGET_MNT" chpasswd >> "$LOG" 2>&1
+else
+    chroot "$TARGET_MNT" passwd -d "$USERNAME" >> "$LOG" 2>&1
+fi
+
 dialog --backtitle "$BACKTITLE" --title "Configuring Bootloader" \
     --infobox "Installing GRUB bootloader..." 4 50
 
@@ -578,7 +672,7 @@ umount "$TARGET_MNT" 2>/dev/null || true
 trap - EXIT
 
 # ============================================================
-# Step 10: Done
+# Step 11: Done
 # ============================================================
 dialog --backtitle "$BACKTITLE" --title "Installation Complete" \
     --yesno "Eclipse Linux has been installed successfully!\n\n\

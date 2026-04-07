@@ -191,6 +191,9 @@ chroot "$ROOTFS" xbps-install -Sy -y \
     network-manager-applet \
     gnome-keyring \
     font-awesome6 \
+    greetd \
+    tuigreet \
+    sudo \
     linux-firmware-amd \
     linux-firmware-intel \
     linux-firmware-nvidia \
@@ -434,6 +437,38 @@ cat > "$ROOTFS/etc/dbus-1/system.conf" <<'DBUSCONF'
 DBUSCONF
 
 # ============================================================
+# greetd + niri session (used on installed system, not live)
+# ============================================================
+echo "Configuring greetd and niri session..."
+
+mkdir -p "$ROOTFS/usr/share/wayland-sessions"
+cat > "$ROOTFS/usr/share/wayland-sessions/eclipse-niri.desktop" <<'NIRI_SESSION'
+[Desktop Entry]
+Name=Eclipse Niri
+Comment=Eclipse Linux Niri Wayland Session
+Exec=/usr/bin/eclipse-niri-session
+Type=Application
+DesktopNames=niri
+NIRI_SESSION
+
+mkdir -p "$ROOTFS/etc/greetd"
+cat > "$ROOTFS/etc/greetd/config.toml" <<'GREETD_CFG'
+[terminal]
+vt = 1
+
+[default_session]
+command = "agreety --cmd /usr/bin/eclipse-niri-session"
+user = "_greeter"
+GREETD_CFG
+
+# Allow members of wheel group to use sudo
+mkdir -p "$ROOTFS/etc/sudoers.d"
+cat > "$ROOTFS/etc/sudoers.d/wheel" <<'SUDOERS'
+%wheel ALL=(ALL:ALL) ALL
+SUDOERS
+chmod 440 "$ROOTFS/etc/sudoers.d/wheel"
+
+# ============================================================
 # System configuration
 # ============================================================
 echo "Configuring Eclipse Linux..."
@@ -479,8 +514,15 @@ touch "$ROOTFS/etc/modules" "$ROOTFS/etc/sysctl.conf"
 mkdir -p "$ROOTFS/etc/modules-load.d"
 printf '%s\n' 'virtio_gpu' > "$ROOTFS/etc/modules-load.d/eclipse-virtio-gpu.conf"
 
-# Install the TUI installer
-install -Dm755 "$PROJECT_ROOT/scripts/eclipse-install" "$ROOTFS/usr/bin/eclipse-install"
+# Install the GUI installer (built via `make installer`)
+# Falls back to the shell script if the musl binary hasn't been compiled yet.
+INSTALLER_BIN="$PROJECT_ROOT/eclipse-installer/target/x86_64-unknown-linux-musl/release/eclipse-installer"
+if [ -f "$INSTALLER_BIN" ]; then
+    install -Dm755 "$INSTALLER_BIN" "$ROOTFS/usr/bin/eclipse-install"
+else
+    echo "WARNING: GUI installer binary not found, falling back to TUI script"
+    install -Dm755 "$PROJECT_ROOT/scripts/eclipse-install" "$ROOTFS/usr/bin/eclipse-install"
+fi
 install -Dm755 "$PROJECT_ROOT/scripts/eclipse-niri-session" "$ROOTFS/usr/bin/eclipse-niri-session"
 
 # Wayland / niri: use seatd (not logind) for libseat
@@ -490,7 +532,7 @@ if [ -z "${XDG_RUNTIME_DIR}" ]; then
     XDG_RUNTIME_DIR="/run/user/$(id -u)"
     export XDG_RUNTIME_DIR
 fi
-if [ ! -d "${XDG_RUNTIME_DIR}" ] && [ "$(id -u)" -eq 0 ]; then
+if [ ! -d "${XDG_RUNTIME_DIR}" ]; then
     mkdir -m 0700 -p "${XDG_RUNTIME_DIR}" 2>/dev/null || true
 fi
 WAYLAND
