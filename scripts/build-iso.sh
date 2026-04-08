@@ -87,7 +87,14 @@ mkdir -p "$ISO_DIR/boot/grub/i386-pc" \
 # ============================================================
 echo "Building initramfs..."
 INITRAMFS_DIR="$WORK/initramfs"
-mkdir -p "$INITRAMFS_DIR"/{sbin,bin,dev,proc,sys,newroot,etc,lib}
+mkdir -p "$INITRAMFS_DIR/sbin" \
+         "$INITRAMFS_DIR/bin" \
+         "$INITRAMFS_DIR/dev" \
+         "$INITRAMFS_DIR/proc" \
+         "$INITRAMFS_DIR/sys" \
+         "$INITRAMFS_DIR/newroot" \
+         "$INITRAMFS_DIR/etc" \
+         "$INITRAMFS_DIR/lib"
 
 # dynamod-init as PID 1
 cp "$ZIG_OUT/dynamod-init" "$INITRAMFS_DIR/sbin/dynamod-init"
