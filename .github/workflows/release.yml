@@ -94,6 +94,9 @@ jobs:
           ECLIPSE_VERSION: ${{ steps.meta.outputs.version }}
         run: make iso
 
+      - name: Fix build directory permissions
+        run: sudo chown -R "$(id -u):$(id -g)" build/
+
       - name: Generate checksums
         working-directory: build
         run: |
