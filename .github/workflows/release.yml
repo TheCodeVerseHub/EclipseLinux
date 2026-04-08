@@ -1,0 +1,140 @@
+name: Release ISO
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version override (e.g. 0.2.0). Defaults to tag name minus the v prefix."
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Eclipse Linux
+        uses: actions/checkout@v4
+
+      - name: Clone dynamod init system
+        run: git clone --depth 1 https://github.com/sinisterMage/dynamod.git dynamod
+
+      - name: Determine version
+        id: meta
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            VER="${{ inputs.version }}"
+          elif [ "${{ github.ref_type }}" = "tag" ]; then
+            VER="${GITHUB_REF_NAME#v}"
+          else
+            VER="0.0.0-dev"
+          fi
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "iso_name=eclipse-linux-${VER}.iso" >> "$GITHUB_OUTPUT"
+          echo "==> Building Eclipse Linux v${VER}"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            squashfs-tools \
+            xorriso \
+            grub-common \
+            grub-pc-bin \
+            grub-efi-amd64-bin \
+            mtools \
+            cpio \
+            gzip \
+            wget \
+            unzip \
+            musl-tools
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: "0.15.0"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Cache Rust build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            dynamod/rust/target
+            eclipse-installer/target
+          key: rust-${{ runner.os }}-${{ hashFiles('dynamod/rust/**/Cargo.lock', 'eclipse-installer/Cargo.lock') }}
+          restore-keys: rust-${{ runner.os }}-
+
+      - name: Cache Void rootfs tarball
+        uses: actions/cache@v4
+        with:
+          path: build/.cache
+          key: void-rootfs-${{ env.VOID_DATE }}
+        env:
+          VOID_DATE: "20250202"
+
+      - name: Build dynamod
+        run: make dynamod
+
+      - name: Build eclipse-installer
+        run: make installer
+
+      - name: Build rootfs and ISO
+        env:
+          ECLIPSE_VERSION: ${{ steps.meta.outputs.version }}
+        run: make iso
+
+      - name: Generate checksums
+        working-directory: build
+        run: |
+          sha256sum *.iso > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Upload ISO as build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.iso_name }}
+          path: |
+            build/eclipse-linux-*.iso
+            build/SHA256SUMS
+          compression-level: 0
+
+      - name: Create GitHub Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Eclipse Linux v${{ steps.meta.outputs.version }}
+          draft: false
+          generate_release_notes: true
+          body: |
+            ## Eclipse Linux v${{ steps.meta.outputs.version }}
+
+            Hybrid ISO (BIOS + UEFI) built on Void Linux musl with the [dynamod](https://github.com/sinisterMage/dynamod) init system.
+
+            ### Verify download
+            ```sh
+            sha256sum -c SHA256SUMS
+            ```
+
+            ### Write to USB
+            ```sh
+            sudo dd if=${{ steps.meta.outputs.iso_name }} of=/dev/sdX bs=4M status=progress oflag=sync
+            ```
+
+            ### Boot in QEMU
+            ```sh
+            qemu-system-x86_64 -cdrom ${{ steps.meta.outputs.iso_name }} -boot d -m 2048M -smp 2 -enable-kvm -cpu host
+            ```
+          files: |
+            build/eclipse-linux-*.iso
+            build/SHA256SUMS
