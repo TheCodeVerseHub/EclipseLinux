@@ -462,15 +462,33 @@ fn setup_accounts(config: &InstallConfig) -> Result<(), String> {
         let _ = run_cmd("mount", &["--bind", &src, &dst]);
     }
 
-    // Set root password
-    log::log("Setting root password...");
-    if let Some(ref pass) = config.root_password {
-        run_chroot_stdin("chpasswd", &[], &format!("root:{}\n", pass))?;
-    } else {
-        run_chroot("passwd", &["-d", "root"])?;
+    // Ensure SHA-512 password hashing — musl's crypt() does not support
+    // yescrypt ($y$) which newer shadow packages may default to.
+    let login_defs = format!("{}/etc/login.defs", TARGET_MNT);
+    if Path::new(&login_defs).exists() {
+        if let Ok(content) = fs::read_to_string(&login_defs) {
+            let fixed: String = content
+                .lines()
+                .map(|line| {
+                    if line.starts_with("ENCRYPT_METHOD") {
+                        "ENCRYPT_METHOD SHA512"
+                    } else {
+                        line
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            let fixed = if content.ends_with('\n') && !fixed.ends_with('\n') {
+                fixed + "\n"
+            } else {
+                fixed
+            };
+            let _ = fs::write(&login_defs, &fixed);
+            log::log("login.defs: ENCRYPT_METHOD set to SHA512");
+        }
     }
 
-    // Create user account
+    // Create user account FIRST so all users exist before chpasswd runs
     log::log(&format!("Creating user {}...", config.username));
     run_chroot(
         "useradd",
@@ -484,15 +502,46 @@ fn setup_accounts(config: &InstallConfig) -> Result<(), String> {
         ],
     )?;
 
-    // Set user password
-    if let Some(ref pass) = config.user_password {
-        run_chroot_stdin(
-            "chpasswd",
-            &[],
-            &format!("{}:{}\n", config.username, pass),
-        )?;
-    } else {
+    // Handle passwordless accounts
+    if config.root_password.is_none() {
+        run_chroot("passwd", &["-d", "root"])?;
+    }
+    if config.user_password.is_none() {
         run_chroot("passwd", &["-d", &config.username])?;
+    }
+
+    // Set all passwords in a SINGLE chpasswd invocation to avoid
+    // shadow file locking issues between separate calls.
+    let mut pw_data = String::new();
+    if let Some(ref pass) = config.root_password {
+        pw_data.push_str(&format!("root:{}\n", pass));
+    }
+    if let Some(ref pass) = config.user_password {
+        pw_data.push_str(&format!("{}:{}\n", config.username, pass));
+    }
+
+    if !pw_data.is_empty() {
+        log::log("Setting passwords via single chpasswd call...");
+        run_chroot_stdin("chpasswd", &[], &pw_data)?;
+
+        // Verify each password was set
+        for user in &["root", config.username.as_str()] {
+            if is_shadow_locked(user) {
+                log::log(&format!("WARNING: chpasswd did not set hash for {user}, trying usermod fallback..."));
+                let hash = generate_password_hash(user, config)?;
+                if !hash.is_empty() {
+                    run_chroot("usermod", &["-p", &hash, user])?;
+                    if is_shadow_locked(user) {
+                        return Err(format!("Failed to set password for {user}"));
+                    }
+                    log::log(&format!("OK: password set for {user} via usermod fallback"));
+                } else {
+                    return Err(format!("Failed to set password for {user} — no hash generation method available"));
+                }
+            } else {
+                log::log(&format!("OK: password set for {user}"));
+            }
+        }
     }
 
     Ok(())
@@ -827,6 +876,43 @@ fn copy_glob_files_with_prefix(search_dir: &str, pattern: &str, staging: &str, t
             }
         }
     }
+}
+
+/// Check whether a user's shadow entry is still locked (!, !!, *, or empty).
+fn is_shadow_locked(user: &str) -> bool {
+    let shadow_path = format!("{}/etc/shadow", TARGET_MNT);
+    if let Ok(content) = fs::read_to_string(&shadow_path) {
+        let prefix = format!("{user}:");
+        if let Some(line) = content.lines().find(|l| l.starts_with(&prefix)) {
+            let hash = line.split(':').nth(1).unwrap_or("");
+            return hash.is_empty()
+                || hash == "!"
+                || hash == "!!"
+                || hash == "*"
+                || hash.starts_with("!$");
+        }
+    }
+    true
+}
+
+/// Generate a SHA-512 password hash via openssl inside the chroot.
+fn generate_password_hash(user: &str, config: &InstallConfig) -> Result<String, String> {
+    let pass = if user == "root" {
+        config.root_password.as_deref().unwrap_or("")
+    } else {
+        config.user_password.as_deref().unwrap_or("")
+    };
+    if pass.is_empty() {
+        return Ok(String::new());
+    }
+    let result = run_chroot_stdin("openssl", &["passwd", "-6", "-stdin"], &format!("{pass}\n"));
+    if let Ok(output) = result {
+        let hash = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if hash.starts_with("$6$") {
+            return Ok(hash);
+        }
+    }
+    Err("openssl passwd not available or failed".to_string())
 }
 
 fn find_first_existing(candidates: &[&str]) -> Option<String> {

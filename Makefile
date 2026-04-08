@@ -1,4 +1,4 @@
-.PHONY: all dynamod installer rootfs iso clean distclean test-qemu test-qemu-serial test-qemu-install
+.PHONY: all dynamod installer rootfs iso clean distclean test-qemu test-qemu-serial test-qemu-install test-qemu-disk test-qemu-disk-serial
 
 ECLIPSE_VERSION ?= 0.1.0
 BUILD_DIR       := $(CURDIR)/build
@@ -95,6 +95,43 @@ test-qemu-install:
 		-smp 2 \
 		-device virtio-vga-gl \
 		-display gtk,gl=on
+
+test-qemu-disk:
+	@[ -f $(BUILD_DIR)/test-disk.qcow2 ] || { echo "ERROR: $(BUILD_DIR)/test-disk.qcow2 not found. Run 'make test-qemu-install' and install first."; exit 1; }
+	@echo "Booting from installed disk..."
+	@QEMU_EXTRA=""; \
+	if [ -w /dev/kvm ]; then \
+		QEMU_EXTRA="-enable-kvm -cpu host"; \
+		echo "KVM: enabled"; \
+	else \
+		echo "KVM: not available (will be slower)"; \
+	fi; \
+	qemu-system-x86_64 \
+		$$QEMU_EXTRA \
+		-drive file=$(BUILD_DIR)/test-disk.qcow2,format=qcow2,if=virtio \
+		-m 2048M \
+		-smp 2 \
+		-device virtio-vga-gl \
+		-display gtk,gl=on
+
+test-qemu-disk-serial:
+	@[ -f $(BUILD_DIR)/test-disk.qcow2 ] || { echo "ERROR: $(BUILD_DIR)/test-disk.qcow2 not found. Run 'make test-qemu-install' and install first."; exit 1; }
+	@echo "Booting from installed disk (serial console)..."
+	@echo "Tip: select 'Eclipse Linux (serial console)' from the GRUB menu."
+	@QEMU_EXTRA=""; \
+	if [ -w /dev/kvm ]; then \
+		QEMU_EXTRA="-enable-kvm -cpu host"; \
+		echo "KVM: enabled"; \
+	else \
+		echo "KVM: not available (will be slower)"; \
+	fi; \
+	qemu-system-x86_64 \
+		$$QEMU_EXTRA \
+		-drive file=$(BUILD_DIR)/test-disk.qcow2,format=qcow2,if=virtio \
+		-m 2048M \
+		-smp 2 \
+		-nographic \
+		-no-reboot
 
 clean:
 	rm -rf $(BUILD_DIR)

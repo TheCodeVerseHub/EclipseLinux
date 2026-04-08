@@ -498,21 +498,55 @@ mount --bind /proc "$TARGET_MNT/proc" 2>/dev/null || true
 mount --bind /dev  "$TARGET_MNT/dev"  2>/dev/null || true
 mount --bind /sys  "$TARGET_MNT/sys"  2>/dev/null || true
 
-# Set root password
-log "Setting root password..."
-if [ -n "$PASS1" ]; then
-    echo "root:$PASS1" | chroot "$TARGET_MNT" chpasswd >> "$LOG" 2>&1
+# Ensure SHA-512 password hashing — musl's crypt() does not support
+# yescrypt ($y$) which newer shadow packages may default to.
+log "Ensuring SHA-512 password hashing in login.defs..."
+if [ -f "$TARGET_MNT/etc/login.defs" ]; then
+    sed -i 's/^ENCRYPT_METHOD.*/ENCRYPT_METHOD SHA512/' "$TARGET_MNT/etc/login.defs"
+    log "login.defs ENCRYPT_METHOD set to SHA512"
 else
-    chroot "$TARGET_MNT" passwd -d root >> "$LOG" 2>&1
+    log "WARNING: /etc/login.defs not found"
 fi
 
-# Create user account
+# Create user account FIRST so all users exist before chpasswd runs
 log "Creating user $USERNAME..."
 chroot "$TARGET_MNT" useradd -m -G wheel,audio,video,input,_seatd -s /usr/bin/fish "$USERNAME" >> "$LOG" 2>&1
-if [ -n "$USER_PASS1" ]; then
-    echo "$USERNAME:$USER_PASS1" | chroot "$TARGET_MNT" chpasswd >> "$LOG" 2>&1
-else
+
+# Handle passwordless accounts
+if [ -z "$PASS1" ]; then
+    chroot "$TARGET_MNT" passwd -d root >> "$LOG" 2>&1
+fi
+if [ -z "$USER_PASS1" ]; then
     chroot "$TARGET_MNT" passwd -d "$USERNAME" >> "$LOG" 2>&1
+fi
+
+# Set all passwords in a SINGLE chpasswd invocation to avoid
+# shadow file locking issues between separate calls.
+PW_INPUT=""
+[ -n "$PASS1" ]      && PW_INPUT="root:${PASS1}"
+if [ -n "$USER_PASS1" ]; then
+    [ -n "$PW_INPUT" ] && PW_INPUT="${PW_INPUT}
+"
+    PW_INPUT="${PW_INPUT}${USERNAME}:${USER_PASS1}"
+fi
+
+if [ -n "$PW_INPUT" ]; then
+    log "Setting passwords via single chpasswd call..."
+    printf '%s\n' "$PW_INPUT" | chroot "$TARGET_MNT" chpasswd >> "$LOG" 2>&1
+    log "chpasswd exited $?"
+
+    # Verify each password was set
+    for _u in root "$USERNAME"; do
+        _hash=$(grep "^${_u}:" "$TARGET_MNT/etc/shadow" 2>/dev/null | cut -d: -f2)
+        case "$_hash" in
+            '!'*|'*'|'')
+                log "WARNING: password not set for $_u (field='$_hash')"
+                ;;
+            *)
+                log "OK: password set for $_u (${#_hash} chars)"
+                ;;
+        esac
+    done
 fi
 
 dialog --backtitle "$BACKTITLE" --title "Configuring Bootloader" \
