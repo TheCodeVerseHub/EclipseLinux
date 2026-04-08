@@ -393,7 +393,7 @@ cat > "$ROOTFS/etc/dynamod/services/seatd.toml" <<'SEATD'
 [service]
 name = "seatd"
 supervisor = "root"
-exec = ["/bin/sh", "-c", "exec env SEATD_VTBOUND=0 /usr/bin/seatd"]
+exec = ["/bin/sh", "-c", "exec env SEATD_VTBOUND=0 /usr/bin/seatd -g _seatd"]
 type = "simple"
 
 [restart]

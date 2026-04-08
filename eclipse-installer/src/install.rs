@@ -8,8 +8,9 @@ use std::thread;
 use std::time::Duration;
 
 use crate::config::{
-    FsType, InstallConfig, BUSYBOX_SYMLINKS, EFI_LABEL, GREETD_SERVICE, GRUB_BIOS_MODULES,
-    INITRAMFS_LIB_PATTERNS, ROOT_LABEL, RSYNC_EXCLUDES, TARGET_MNT, USER_GROUPS, USER_SHELL,
+    FsType, InstallConfig, BUSYBOX_SYMLINKS, EFI_LABEL, GRUB_BIOS_MODULES,
+    INITRAMFS_LIB_PATTERNS, NIRI_AUTOSTART_PROFILE, ROOT_LABEL, RSYNC_EXCLUDES, TARGET_MNT,
+    USER_GROUPS, USER_SHELL,
 };
 use crate::log;
 
@@ -428,16 +429,11 @@ fn configure_system(config: &InstallConfig) -> Result<(), String> {
             .map_err(|e| format!("Failed to write passwd: {}", e))?;
     }
 
-    // Replace agetty with greetd service
-    let agetty_path = format!("{}/etc/dynamod/services/agetty-tty1.toml", TARGET_MNT);
-    let _ = fs::remove_file(&agetty_path);
-
-    let greetd_dir = format!("{}/etc/dynamod/services", TARGET_MNT);
-    fs::create_dir_all(&greetd_dir)
-        .map_err(|e| format!("mkdir {}: {}", greetd_dir, e))?;
-    let greetd_path = format!("{}/greetd.toml", greetd_dir);
-    fs::write(&greetd_path, GREETD_SERVICE)
-        .map_err(|e| format!("Failed to write greetd service: {}", e))?;
+    // Auto-start niri session on tty1 after login (replaces greetd which has
+    // session-worker hangs in seatd/dynamod environments).
+    let autostart_path = format!("{}/etc/profile.d/eclipse-niri-autostart.sh", TARGET_MNT);
+    fs::write(&autostart_path, NIRI_AUTOSTART_PROFILE)
+        .map_err(|e| format!("Failed to write niri autostart profile: {}", e))?;
 
     // Remove live-environment artifacts
     let live_profile = format!("{}/etc/profile.d/eclipse-live.sh", TARGET_MNT);

@@ -27,28 +27,12 @@ pub const TIMEZONE_REGIONS: &[&str] = &[
     "US",
 ];
 
-/// Content of the greetd service file written to the target.
-pub const GREETD_SERVICE: &str = r#"[service]
-name = "greetd"
-supervisor = "root"
-exec = ["/usr/bin/greetd"]
-type = "simple"
-
-[restart]
-policy = "permanent"
-delay = "2s"
-max-restarts = 5
-max-restart-window = "60s"
-
-[dependencies]
-after = ["dbus", "seatd", "udev-coldplug"]
-
-[readiness]
-type = "none"
-
-[shutdown]
-stop-signal = "SIGTERM"
-stop-timeout = "10s"
+/// Profile script that auto-starts the niri Wayland session on tty1.
+/// Replaces greetd which has session-worker hangs in seatd/dynamod environments.
+pub const NIRI_AUTOSTART_PROFILE: &str = r#"# Auto-start Eclipse niri session on tty1 after login
+if [ "$(tty)" = "/dev/tty1" ] && [ -z "$WAYLAND_DISPLAY" ]; then
+    exec /usr/bin/eclipse-niri-session
+fi
 "#;
 
 /// Busybox symlinks created inside the initramfs staging directory.

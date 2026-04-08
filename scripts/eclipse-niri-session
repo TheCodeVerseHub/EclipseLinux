@@ -3,8 +3,11 @@
 # Prefer this over raw `niri --session`: session D-Bus, udev settle, short delay for libinput.
 
 export LIBSEAT_BACKEND=seatd
-: "${XDG_RUNTIME_DIR:=/run/user/$(id -u)}"
-mkdir -m 0700 -p "$XDG_RUNTIME_DIR" 2>/dev/null || true
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+if ! mkdir -m 0700 -p "$XDG_RUNTIME_DIR" 2>/dev/null; then
+	export XDG_RUNTIME_DIR="/tmp/eclipse-runtime-$(id -u)"
+	mkdir -m 0700 -p "$XDG_RUNTIME_DIR"
+fi
 
 # Mesa: ensure DRI drivers resolve (musl/live); avoid llvmpipe being picked for virtio
 # (niri skips "software" EGL devices — then the first DRM device has no allocator yet).

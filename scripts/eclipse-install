@@ -445,31 +445,15 @@ fi
 # restore the 'x' marker so login checks /etc/shadow for the real hash.
 sed -i 's|^root:[^:]*:|root:x:|' "$TARGET_MNT/etc/passwd"
 
-# Replace agetty console login with greetd for graphical login
-rm -f "$TARGET_MNT/etc/dynamod/services/agetty-tty1.toml"
-cat > "$TARGET_MNT/etc/dynamod/services/greetd.toml" <<'GREETD_SVC'
-[service]
-name = "greetd"
-supervisor = "root"
-exec = ["/usr/bin/greetd"]
-type = "simple"
-
-[restart]
-policy = "permanent"
-delay = "2s"
-max-restarts = 5
-max-restart-window = "60s"
-
-[dependencies]
-after = ["dbus", "seatd", "udev-coldplug"]
-
-[readiness]
-type = "none"
-
-[shutdown]
-stop-signal = "SIGTERM"
-stop-timeout = "10s"
-GREETD_SVC
+# Auto-start niri session on tty1 after login (replaces greetd which has
+# session-worker hangs in seatd/dynamod environments).
+cat > "$TARGET_MNT/etc/profile.d/eclipse-niri-autostart.sh" <<'NIRI_AUTOSTART'
+# Auto-start Eclipse niri session on tty1 after login
+if [ "$(tty)" = "/dev/tty1" ] && [ -z "$WAYLAND_DISPLAY" ]; then
+    exec /usr/bin/eclipse-niri-session
+fi
+NIRI_AUTOSTART
+chmod 644 "$TARGET_MNT/etc/profile.d/eclipse-niri-autostart.sh"
 
 # Remove live-environment artifacts
 rm -f "$TARGET_MNT/etc/profile.d/eclipse-live.sh"
