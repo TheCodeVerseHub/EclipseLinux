@@ -7,8 +7,8 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version override (e.g. 0.2.0). Defaults to tag name minus the v prefix."
-        required: false
+        description: "Version to release (e.g. 0.2.0). A v-prefixed tag will be created."
+        required: true
 
 permissions:
   contents: write
@@ -115,6 +115,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ steps.meta.outputs.version }}
           name: Eclipse Linux v${{ steps.meta.outputs.version }}
           draft: false
           generate_release_notes: true
