@@ -1,0 +1,36 @@
+name: "Documentation"
+description: "Report or request a documentation change"
+title: "docs: <short summary>"
+labels: ["documentation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for documentation fixes or requests.
+
+  - type: textarea
+    id: change
+    attributes:
+      label: What should be changed?
+      description: Point to the page/file/section and describe the change.
+      placeholder: |
+        File(s):
+        Section:
+        Current text:
+        Proposed text:
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Links, screenshots, or related issues.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched for existing issues and didn’t find a duplicate.
+          required: true

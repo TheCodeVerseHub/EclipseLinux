@@ -1,0 +1,79 @@
+name: "Bug report"
+description: "Report a reproducible problem"
+title: "bug: <short summary>"
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect to happen, and what happened instead?
+      placeholder: "Steps, expected behavior, actual behavior"
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Provide the smallest set of steps to reproduce the issue.
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / output
+      description: Paste relevant logs or command output (redact secrets).
+      render: shell
+
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      description: ISO version, git commit SHA, or release tag.
+      placeholder: "vX.Y.Z or abcdef1"
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - "eclipse-installer"
+        - "build scripts (ISO/rootfs)"
+        - "config (grub/skel/os-release/etc.)"
+        - "docs"
+        - "other"
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Hardware + virtualization + host OS, if relevant.
+      placeholder: |
+        - CPU:
+        - RAM:
+        - Disk:
+        - VM/metal:
+        - Host OS:
+
+  - type: checkboxes
+    id: triage
+    attributes:
+      label: Triage
+      options:
+        - label: I searched for existing issues and didn’t find a duplicate.
+          required: true
+        - label: I can reproduce this on the latest `main` (or latest release).
+          required: false

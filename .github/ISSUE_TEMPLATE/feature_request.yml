@@ -1,0 +1,54 @@
+name: "Feature request"
+description: "Suggest an improvement or new capability"
+title: "feat: <short summary>"
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for proposing a feature.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: What problem are you trying to solve?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would you like to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What other approaches did you consider?
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - "eclipse-installer"
+        - "build scripts (ISO/rootfs)"
+        - "config (grub/skel/os-release/etc.)"
+        - "docs"
+        - "other"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched for existing issues and didn’t find a duplicate.
+          required: true
+        - label: I’m willing to open a PR for this.
+          required: false

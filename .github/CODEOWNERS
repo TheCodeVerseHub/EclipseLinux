@@ -1,0 +1,18 @@
+# Default owners
+* @TheCodeVerseHub/eclipse-maintainers
+
+# Rust installer code
+/eclipse-installer/ @TheCodeVerseHub/eclipse-maintainers @TheCodeVerseHub/eclipse-contributors
+
+# Build & runtime scripts
+/scripts/ @TheCodeVerseHub/eclipse-maintainers @TheCodeVerseHub/eclipse-contributors
+
+# Documentation
+/README.md @TheCodeVerseHub/documentation @TheCodeVerseHub/documentation
+/CONTRIBUTING.md @TheCodeVerseHub/documentation @TheCodeVerseHub/documentation
+
+# Security policy
+/SECURITY.md @TheCodeVerseHub/security @TheCodeVerseHub/security
+
+# GitHub configuration
+/.github/ @TheCodeVerseHub/eclipse-maintainers
