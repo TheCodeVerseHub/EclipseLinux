@@ -1,0 +1,29 @@
+# Keep the Docker build context lean. Mirrors .gitignore plus a few extras
+# that aren't tracked in git but exist locally during development.
+
+# Build artifacts
+build/
+*.iso
+*.img
+*.squashfs
+
+# Cargo / Zig target trees (often gigabytes — never wanted in context)
+eclipse-installer/target/
+dynamod/rust/target/
+dynamod/zig/zig-out/
+dynamod/zig/.zig-cache/
+
+# Local neomake clone used for inspection (CI installs neomake from git instead)
+neomake/
+
+# VCS metadata
+.git/
+.github/
+
+# Editor / OS noise
+.vscode/
+.idea/
+.DS_Store
+
+# Large dev-only assets
+wallpaper-test.jpg

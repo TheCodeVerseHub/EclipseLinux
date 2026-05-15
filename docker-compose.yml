@@ -1,0 +1,52 @@
+# Compose wrappers for the Dockerfiles at the repo root.
+#
+# Common commands:
+#
+#   # Produce build/eclipse-linux-<ver>.iso on your host:
+#   docker compose run --rm build
+#
+#   # Run a different make target in the build container:
+#   docker compose run --rm build make dynamod
+#   docker compose run --rm build make installer
+#   docker compose run --rm build make clean
+#
+#   # Boot Eclipse Linux as a container (dynamod-init as PID 1):
+#   docker compose up runtime
+#
+#   # Drop into a shell inside the runtime image (bypasses dynamod-init):
+#   docker compose run --rm --entrypoint /bin/sh runtime
+#
+# Both images require `--privileged` (provided here):
+#   * `build`   — scripts/build-rootfs.sh chroots + bind-mounts /proc /sys /dev
+#   * `runtime` — dynamod-init mounts its own /proc /sys /dev at PID 1
+
+services:
+  build:
+    build:
+      context: .
+      dockerfile: Dockerfile.build
+    image: eclipse-linux-build:latest
+    privileged: true
+    tty: true
+    stdin_open: true
+    volumes:
+      - .:/src
+    working_dir: /src
+    # `command:` deliberately omitted so the Dockerfile's `CMD ["make", "iso"]`
+    # is the default; override on the CLI with `docker compose run --rm build <cmd>`.
+
+  runtime:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: eclipse-linux:latest
+    hostname: eclipse-linux
+    privileged: true
+    tty: true
+    stdin_open: true
+    stop_signal: SIGTERM
+    stop_grace_period: 10s
+    # Matches dynamod/docker/docker-compose.yml — gives services like bootmisc
+    # a writable /tmp without polluting the image's overlay filesystem.
+    tmpfs:
+      - /tmp

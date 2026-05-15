@@ -16,7 +16,7 @@ all: iso
 # dynamod builds as the current user (needs zig + rustup configured for your user).
 # Do NOT run this target under sudo.
 dynamod:
-	$(MAKE) -C $(DYNAMOD_DIR)
+	cd $(DYNAMOD_DIR) && neomake run all
 
 # GUI installer — builds as the current user.
 # Requires: rustup target add x86_64-unknown-linux-musl && sudo pacman -S musl
@@ -137,4 +137,4 @@ clean:
 	rm -rf $(BUILD_DIR)
 
 distclean: clean
-	$(MAKE) -C $(DYNAMOD_DIR) clean
+	cd $(DYNAMOD_DIR) && neomake run clean

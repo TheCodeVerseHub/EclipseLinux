@@ -1,0 +1,77 @@
+# Build environment for producing the Eclipse Linux ISO.
+#
+# Mirrors the GitHub Actions runner from .github/workflows/release.yml so the
+# same `make iso` flow works locally on any host (including NixOS, where
+# chroot + bind mounts on the host are inconvenient).
+#
+# Build:
+#   docker build -f Dockerfile.build -t eclipse-linux-build .
+#
+# Use:
+#   docker run --rm --privileged \
+#       -v "$(pwd)":/src -w /src \
+#       eclipse-linux-build \
+#       make iso
+#
+#   # The --privileged flag is required: scripts/build-rootfs.sh runs
+#   # chroot + bind-mounts /proc, /sys, /dev inside the container, and
+#   # scripts/build-iso.sh uses losetup-like ISO assembly.
+
+FROM ubuntu:24.04
+
+ARG ZIG_VERSION=0.15.2
+ARG NEOMAKE_REV=aaa042162542db06912bdf08cc26be67f8a8ad68
+ARG RUST_TARGET=x86_64-unknown-linux-musl
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PATH=/root/.cargo/bin:/usr/local/bin:/usr/bin:/bin
+
+# Host tooling expected by scripts/build-rootfs.sh, scripts/build-iso.sh, and
+# the Makefile's iso/installer/test-* targets. Mirrors the apt list in
+# .github/workflows/release.yml plus the rootfs script's runtime needs.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        wget \
+        git \
+        sudo \
+        xz-utils \
+        build-essential \
+        pkg-config \
+        musl-tools \
+        squashfs-tools \
+        xorriso \
+        grub-common \
+        grub-pc-bin \
+        grub-efi-amd64-bin \
+        mtools \
+        cpio \
+        gzip \
+        unzip \
+        rsync \
+        parted \
+        dialog \
+        util-linux \
+        qemu-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# Zig — same version as CI (mlugg/setup-zig@v2 with version: "0.15.0")
+RUN curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" \
+        | tar -xJ -C /opt \
+    && ln -s "/opt/zig-x86_64-linux-${ZIG_VERSION}/zig" /usr/local/bin/zig
+
+# Rustup + stable toolchain + musl target — same setup as dtolnay/rust-toolchain@stable
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        | sh -s -- -y --default-toolchain stable --profile minimal \
+    && rustup target add "${RUST_TARGET}"
+
+# neomake — pinned to the same revision as shell.nix and CI
+RUN cargo install --git https://github.com/sinisterMage/neomake \
+        --rev "${NEOMAKE_REV}" \
+        --bin neomake \
+    && neomake --version
+
+WORKDIR /src
+
+# Default to running `make iso`; override with any other command at `docker run`.
+CMD ["make", "iso"]

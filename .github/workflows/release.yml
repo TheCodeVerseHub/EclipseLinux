@@ -57,7 +57,7 @@ jobs:
       - name: Setup Zig
         uses: mlugg/setup-zig@v2
         with:
-          version: "0.15.0"
+          version: "0.15.2"
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -82,6 +82,12 @@ jobs:
           key: void-rootfs-${{ env.VOID_DATE }}
         env:
           VOID_DATE: "20250202"
+
+      - name: Install neomake
+        run: |
+          cargo install --git https://github.com/sinisterMage/neomake \
+            --rev aaa042162542db06912bdf08cc26be67f8a8ad68 \
+            --bin neomake
 
       - name: Build dynamod
         run: make dynamod

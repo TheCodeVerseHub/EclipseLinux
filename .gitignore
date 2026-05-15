@@ -3,5 +3,6 @@ build/
 *.img
 *.squashfs
 dynamod/
+neomake/
 eclipse-installer/target
 
