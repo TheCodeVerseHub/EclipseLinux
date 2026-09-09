@@ -2,6 +2,8 @@
 
 This roadmap is derived from a gap analysis of the repository at commit `67e3d4f`. Every item below traces to something concretely missing or broken in the tree today — the gap inventory records the evidence, and the milestones turn those gaps into ordered work.
 
+The milestone work items are tracked on the [Eclipse Linux Roadmap project board](https://github.com/orgs/TheCodeVerseHub/projects/6), where each card carries its phase and the gap IDs it closes. This file remains the source of truth; the board is a view of it.
+
 Eclipse currently does one thing well: it produces a bootable hybrid ISO that runs a Wayland desktop on a non-systemd, non-runit init. What it does not yet have is a build you can reproduce, a test that tells you when you broke it, or a story for what happens to an installed system after install day. That ordering — reproducible, then verifiable, then hardened, then maintainable — is the shape of this roadmap.
 
 ## How to read this
@@ -43,7 +45,7 @@ Eclipse currently does one thing well: it produces a bootable hybrid ISO that ru
 | S1 | The shipped D-Bus system bus policy is fully permissive — `<allow own="*"/>`, `send_destination="*"`, and `eavesdrop="true"` for the default context. Any local user can own any bus name and read all system bus traffic | `scripts/build-rootfs.sh:420-437` | High |
 | S2 | `/etc/resolv.conf` is hardcoded to `8.8.8.8` on every installed system, overriding whatever NetworkManager would have configured | `eclipse-installer/src/install.rs:443-445`, `build-rootfs.sh:111-112` | Medium |
 | S3 | No Secure Boot support; the ISO cannot boot on stock UEFI firmware with Secure Boot enabled | `build-iso.sh:276-292` uses unsigned `grub-mkstandalone` output | Medium |
-| S4 | `SECURITY.md` points reporters at `TheCodeVerseHub/EclipseLinux` while `os-release` and CI use `sinisterMage/EclipseLinux`. One of those advisory links is dead | `SECURITY.md:8` vs `config/os-release:6-7` | High |
+| S4 | `config/os-release` points `HOME_URL` and `BUG_REPORT_URL` at `sinisterMage/EclipseLinux`, but the project lives at `TheCodeVerseHub/EclipseLinux`. Every installed system tells its users to file bugs at the wrong repo | `config/os-release:6-7` vs `git remote` and `SECURITY.md:8` | High |
 | S5 | The installer permits a passwordless root **and** a passwordless user on the installed system, with no warning at the confirmation step | `install.rs:502-507` | Medium |
 | S6 | Passwords are held as plaintext `String` in `InstallConfig`, cloned into the install thread, and never zeroized | `config.rs:100-103` | Low |
 
@@ -86,7 +88,7 @@ Eclipse currently does one thing well: it produces a bootable hybrid ISO that ru
 | ID | Gap | Evidence | Severity |
 |----|-----|----------|----------|
 | P1 | No `CODE_OF_CONDUCT.md`, though issue templates and CODEOWNERS assume an organisation with maintainer and contributor teams | `.github/` | Low |
-| P2 | `CODEOWNERS` references `@TheCodeVerseHub/*` teams while the project's own URLs say `sinisterMage`. If those teams do not exist, review assignment silently does nothing | `.github/CODEOWNERS` | Medium |
+| P2 | `CODEOWNERS` lists each team twice on the doc and security lines (`@TheCodeVerseHub/documentation @TheCodeVerseHub/documentation`), which is harmless but suggests the file was never verified against real review assignment | `.github/CODEOWNERS:11-15` | Low |
 | P3 | Only `x86_64` is supported. No aarch64 path exists, in the scripts or the roadmap-to-date | `build-rootfs.sh:26`, `build-iso.sh` | Low |
 
 ---
@@ -97,7 +99,7 @@ Eclipse currently does one thing well: it produces a bootable hybrid ISO that ru
 
 *Goal: two people building the same commit get the same ISO, and can tell whether what they downloaded is what was published.*
 
-Addresses **B1–B7**, **S4**, **P2**.
+Addresses **B1–B7**, **S4**.
 
 1. Pin dynamod. Either add it as a git submodule or introduce a `DYNAMOD_REF` variable consumed by the Makefile, CI, and both Dockerfiles. The chosen ref must be printed at build time and recorded in the ISO (e.g. `/etc/eclipse-build-info`).
 2. Verify every download. Ship an expected `sha256` for the Void tarball, the Nerd Font archives, and the Bibata theme; fail the build on mismatch. Verify the Void tarball's signature where available.
@@ -106,7 +108,7 @@ Addresses **B1–B7**, **S4**, **P2**.
 5. Collapse the version defaults to one source. Generate `os-release` from `ECLIPSE_VERSION` instead of tracking a file with the version baked in.
 6. Single-source the neomake pin (a `.neomake-rev` file read by all four consumers).
 7. Sign `SHA256SUMS` in the release workflow and document verification in the release notes.
-8. Fix the org mismatch in `SECURITY.md` and `CODEOWNERS`; confirm the referenced teams exist.
+8. Point `config/os-release`'s `HOME_URL` and `BUG_REPORT_URL` at `TheCodeVerseHub/EclipseLinux`, so installed systems send users to the repo that actually exists.
 
 **Exit criteria:** two clean builds of the same commit on different hosts produce byte-identical squashfs input, the build fails loudly on a tampered download, and a released ISO can be verified end to end from a signature.
 
