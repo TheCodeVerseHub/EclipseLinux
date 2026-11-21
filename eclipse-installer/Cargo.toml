@@ -9,7 +9,7 @@ name = "eclipse-installer"
 path = "src/main.rs"
 
 [dependencies]
-ratatui = "0.29"
+ratatui = "0.30"
 crossterm = "0.28"
 nix = { version = "0.32", features = ["mount", "signal", "user", "fs"] }
 regex = "1"
