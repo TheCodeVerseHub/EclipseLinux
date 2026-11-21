@@ -19,7 +19,7 @@ jobs:
 
     steps:
       - name: Checkout Eclipse Linux
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Clone dynamod init system
         run: git clone --depth 1 https://github.com/sinisterMage/dynamod.git dynamod
