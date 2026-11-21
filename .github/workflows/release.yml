@@ -65,7 +65,7 @@ jobs:
           targets: x86_64-unknown-linux-musl
 
       - name: Cache Rust build artifacts
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -76,7 +76,7 @@ jobs:
           restore-keys: rust-${{ runner.os }}-
 
       - name: Cache Void rootfs tarball
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: build/.cache
           key: void-rootfs-${{ env.VOID_DATE }}
