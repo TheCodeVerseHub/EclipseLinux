@@ -20,7 +20,7 @@
 # ----------------------------------------------------------------------------
 # Stage 1: build dynamod (zig PID-1 + rust service manager / tools)
 # ----------------------------------------------------------------------------
-FROM ubuntu:24.04 AS builder
+FROM ubuntu:26.04 AS builder
 
 ARG ZIG_VERSION=0.15.2
 ARG NEOMAKE_REV=aaa042162542db06912bdf08cc26be67f8a8ad68

@@ -17,7 +17,7 @@
 #   # chroot + bind-mounts /proc, /sys, /dev inside the container, and
 #   # scripts/build-iso.sh uses losetup-like ISO assembly.
 
-FROM ubuntu:24.04
+FROM ubuntu:26.04
 
 ARG ZIG_VERSION=0.15.2
 ARG NEOMAKE_REV=aaa042162542db06912bdf08cc26be67f8a8ad68
